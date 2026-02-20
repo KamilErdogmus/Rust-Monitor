@@ -1,4 +1,6 @@
 mod app;
+#[cfg(target_os = "macos")]
+mod macos_gpu;
 mod theme;
 mod ui;
 
@@ -26,14 +28,21 @@ fn run(mut terminal: DefaultTerminal) -> io::Result<()> {
         terminal.draw(|frame| ui::draw(frame, &mut app))?;
 
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
-        if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
+        if event::poll(timeout)?
+            && let Event::Key(key) = event::read()?
+        {
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
 
                 if app.show_help {
                     app.toggle_help();
+                    continue;
+                }
+
+                // Process detail popup
+                if app.show_process_detail {
+                    app.close_detail();
                     continue;
                 }
 
@@ -73,13 +82,13 @@ fn run(mut terminal: DefaultTerminal) -> io::Result<()> {
                     KeyCode::Char('?') => app.toggle_help(),
                     KeyCode::Char('/') => app.enter_search(),
                     KeyCode::Char('x') => app.request_kill(),
+                    KeyCode::Enter => app.show_detail(),
                     KeyCode::Char('1') => app.active_tab = app::Tab::Overview,
                     KeyCode::Char('2') => app.active_tab = app::Tab::Processes,
                     KeyCode::Char('3') => app.active_tab = app::Tab::SystemInfo,
                     KeyCode::Char('4') => app.active_tab = app::Tab::NetworkDetail,
                     _ => {}
                 }
-            }
         }
 
         if last_tick.elapsed() >= tick_rate {

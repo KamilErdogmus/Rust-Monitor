@@ -26,6 +26,7 @@ It is designed for environments where a graphical monitor is unavailable or impr
 | Headless servers | Full system visibility without a display server |
 | Terminal multiplexers | Run alongside your workflow in a tmux or screen pane |
 | Minimal environments | No `htop` or `btop` available — just needs the Rust toolchain |
+| Stealth monitoring | Unlike `taskmgr.exe` or `procexp.exe`, RustMonitor is not recognized by process-hiding malware — hidden miners and suspicious processes remain visible |
 
 ---
 
@@ -34,10 +35,12 @@ It is designed for environments where a graphical monitor is unavailable or impr
 - **4 dashboard tabs** — Overview, Processes, System Info, Network Detail
 - **CPU monitoring** — Per-core usage gauges with color coding and 60-second sparkline history
 - **Memory & swap** — Real-time gauges with historical trend visualization
-- **Process management** — Sortable columns (CPU / Memory / Name / PID), live search filtering, process kill
+- **GPU monitoring** — NVIDIA (via NVML), AMD (via sysfs on Linux), Apple Silicon/Intel (via system_profiler on macOS) — utilization, VRAM, temperature, fan speed, power draw with sparkline history
+- **Process management** — Sortable columns (CPU / Memory / Name / PID), live search filtering, process kill with confirmation
+- **Process detail popup** — Press Enter to inspect PID, parent PID, executable path, command line, threads, virtual memory, disk I/O, environment variable count
 - **Network monitoring** — Per-interface statistics (RX/TX, packets, errors, MAC address) with live traffic graphs
 - **Disk usage** — Per-disk utilization bars with filesystem type display
-- **System information** — Hostname, OS, kernel version, CPU model, architecture, uptime
+- **System information** — Hostname, OS, kernel version, CPU model, architecture, uptime, GPU details
 - **4 color themes** — Default, Ocean, Forest, Sunset — cycle with a single keypress
 - **Keyboard-driven** — Full navigation without a mouse, vim-style keybindings supported
 - **Help overlay** — In-app keybinding reference
@@ -204,6 +207,42 @@ timeout 10 curl -o /dev/null https://speed.hetzner.de/100MB.bin
 
 ---
 
+## GPU Support
+
+| Platform | Backend | Data Available |
+|----------|---------|----------------|
+| NVIDIA (all OS) | NVML via `nvml-wrapper` | Utilization, VRAM, temperature, fan speed, power draw |
+| Apple Silicon (macOS) | IOReport private API | Utilization, temperature, power draw, frequency |
+| AMD (Linux) | sysfs (`/sys/class/drm`) | Utilization, VRAM, temperature |
+| No GPU detected | — | Graceful fallback, panel hidden |
+
+> **Note:** Apple Silicon monitoring uses undocumented macOS APIs (same approach as [macmon](https://github.com/vladkens/macmon)). No sudo required. VRAM is not shown because Apple Silicon uses unified memory shared with the CPU.
+
+---
+
+## Project Structure
+
+```
+rustmonitor/
+├── Cargo.toml
+├── build.rs             # Platform-specific link flags (IOKit on macOS)
+├── src/
+│   ├── main.rs          # Entry point, event loop, key handling
+│   ├── app.rs           # Application state, system data collection, GPU detection
+│   ├── macos_gpu.rs     # Apple Silicon GPU via IOReport (macOS only)
+│   ├── theme.rs         # 4 color theme definitions
+│   └── ui/
+│       ├── mod.rs       # Main draw dispatcher, tabs, footer
+│       ├── overview.rs  # Overview tab (CPU, memory, disks, network, GPU)
+│       ├── processes.rs # Processes tab (table, search bar)
+│       ├── system.rs    # System info tab (details + resource gauges)
+│       ├── network.rs   # Network detail tab (sparklines + interface table)
+│       ├── popups.rs    # Help, kill confirm, process detail popups
+│       └── helpers.rs   # Shared utilities (centered_rect, info_line, etc.)
+```
+
+---
+
 ## Tech Stack
 
 | Crate | Version | Purpose |
@@ -211,6 +250,7 @@ timeout 10 curl -o /dev/null https://speed.hetzner.de/100MB.bin
 | [Ratatui](https://ratatui.rs) | 0.30 | Terminal UI framework |
 | [Crossterm](https://github.com/crossterm-rs/crossterm) | 0.29 | Cross-platform terminal manipulation |
 | [sysinfo](https://github.com/GuillaumeGomez/sysinfo) | 0.38.2 | System information gathering |
+| [nvml-wrapper](https://github.com/Cldfire/nvml-wrapper) | 0.12 | NVIDIA GPU monitoring (with cross-platform fallbacks) |
 
 ## License
 

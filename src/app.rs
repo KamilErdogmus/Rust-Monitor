@@ -1,6 +1,7 @@
 use sysinfo::{Disks, Networks, Pid, Signal, System};
 use std::collections::VecDeque;
 use std::time::Instant;
+use nvml_wrapper::Nvml;
 
 const HISTORY_LEN: usize = 60;
 
@@ -120,6 +121,28 @@ pub struct NetworkInterface {
     pub mac_address: String,
 }
 
+pub struct GpuInfo {
+    pub name: String,
+    pub temperature: u32,
+    pub utilization: u32,
+    pub memory_used: u64,
+    pub memory_total: u64,
+    pub fan_speed: Option<u32>,
+    pub power_usage: Option<u32>,
+    pub power_limit: Option<u32>,
+}
+
+pub struct ProcessDetail {
+    pub base: ProcessInfo,
+    pub parent_pid: Option<u32>,
+    pub cmd: String,
+    pub exe: String,
+    pub root: String,
+    pub environ_count: usize,
+    pub threads: Option<u64>,
+    pub virtual_memory: u64,
+}
+
 pub struct App {
     pub system: System,
     pub disks: Disks,
@@ -167,6 +190,13 @@ pub struct App {
     pub kill_confirm: Option<u32>,
     pub status_message: Option<(String, Instant)>,
     pub tick_count: u64,
+    pub show_process_detail: bool,
+    pub process_detail: Option<ProcessDetail>,
+    pub nvml: Option<Nvml>,
+    pub gpus: Vec<GpuInfo>,
+    pub gpu_util_history: Vec<VecDeque<f64>>,
+    #[cfg(target_os = "macos")]
+    pub apple_gpu_sampler: Option<crate::macos_gpu::AppleGpuSampler>,
 }
 
 impl App {
@@ -224,6 +254,13 @@ impl App {
             kill_confirm: None,
             status_message: None,
             tick_count: 0,
+            show_process_detail: false,
+            process_detail: None,
+            nvml: Nvml::init().ok(),
+            gpus: Vec::new(),
+            gpu_util_history: Vec::new(),
+            #[cfg(target_os = "macos")]
+            apple_gpu_sampler: crate::macos_gpu::AppleGpuSampler::new(),
         };
         app.update_stats();
         app
@@ -236,10 +273,10 @@ impl App {
         self.update_stats();
         self.tick_count += 1;
 
-        if let Some((_, time)) = &self.status_message {
-            if time.elapsed().as_secs() >= 3 {
-                self.status_message = None;
-            }
+        if let Some((_, time)) = &self.status_message
+            && time.elapsed().as_secs() >= 3
+        {
+            self.status_message = None;
         }
     }
 
@@ -308,6 +345,285 @@ impl App {
 
         self.sort_processes();
         self.update_filtered();
+        self.update_gpu();
+    }
+
+    fn update_gpu(&mut self) {
+        // Try NVML first (NVIDIA GPUs on all platforms)
+        if let Some(nvml) = &self.nvml
+            && let Ok(count) = nvml.device_count()
+        {
+                self.gpus.clear();
+                for i in 0..count {
+                    let device = match nvml.device_by_index(i) {
+                        Ok(d) => d,
+                        Err(_) => continue,
+                    };
+
+                    let name = device.name().unwrap_or_else(|_| "Unknown GPU".into());
+                    let temperature = device
+                        .temperature(
+                            nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu,
+                        )
+                        .unwrap_or(0);
+                    let utilization =
+                        device.utilization_rates().map(|u| u.gpu).unwrap_or(0);
+                    let memory = device.memory_info().ok();
+                    let memory_used = memory.as_ref().map(|m| m.used).unwrap_or(0);
+                    let memory_total = memory.as_ref().map(|m| m.total).unwrap_or(0);
+                    let fan_speed = device.fan_speed(0).ok();
+                    let power_usage = device.power_usage().ok();
+                    let power_limit = device.enforced_power_limit().ok();
+
+                    self.gpus.push(GpuInfo {
+                        name,
+                        temperature,
+                        utilization,
+                        memory_used,
+                        memory_total,
+                        fan_speed,
+                        power_usage,
+                        power_limit,
+                    });
+
+                    while self.gpu_util_history.len() <= i as usize {
+                        self.gpu_util_history
+                            .push(VecDeque::from(vec![0.0; HISTORY_LEN]));
+                    }
+                    self.gpu_util_history[i as usize].pop_front();
+                    self.gpu_util_history[i as usize].push_back(utilization as f64);
+                }
+                if !self.gpus.is_empty() {
+                    return;
+                }
+        }
+
+        // Fallback: platform-specific GPU detection
+        self.detect_platform_gpu();
+    }
+
+    fn detect_platform_gpu(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            self.detect_macos_gpu();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.detect_linux_gpu();
+        }
+        // Windows without NVML: no fallback (AMD/Intel don't expose easy APIs)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn detect_macos_gpu(&mut self) {
+        // Use IOReport sampler for real-time metrics
+        if let Some(sampler) = &mut self.apple_gpu_sampler {
+            if let Some(metrics) = sampler.sample() {
+                // Get a nice GPU name from system_profiler
+                let gpu_name = if metrics.gpu_name == "Apple GPU" {
+                    crate::macos_gpu::get_apple_gpu_name()
+                } else {
+                    metrics.gpu_name
+                };
+
+                // Convert power from milliwatts to the same unit as NVML (milliwatts)
+                let power_usage = metrics.power_mw;
+
+                self.gpus.clear();
+                self.gpus.push(GpuInfo {
+                    name: gpu_name,
+                    temperature: metrics.temperature,
+                    utilization: metrics.utilization,
+                    memory_used: 0,  // Apple Silicon uses unified memory
+                    memory_total: 0, // No separate VRAM
+                    fan_speed: None,
+                    power_usage,
+                    power_limit: None,
+                });
+
+                if self.gpu_util_history.is_empty() {
+                    self.gpu_util_history
+                        .push(VecDeque::from(vec![0.0; HISTORY_LEN]));
+                }
+                self.gpu_util_history[0].pop_front();
+                self.gpu_util_history[0].push_back(metrics.utilization as f64);
+                return;
+            }
+        }
+
+        // Fallback: just get GPU name from system_profiler
+        let name = crate::macos_gpu::get_apple_gpu_name();
+        if !self.gpus.iter().any(|g| g.name == name) {
+            self.gpus.push(GpuInfo {
+                name,
+                temperature: 0,
+                utilization: 0,
+                memory_used: 0,
+                memory_total: 0,
+                fan_speed: None,
+                power_usage: None,
+                power_limit: None,
+            });
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn detect_linux_gpu(&mut self) {
+        use std::fs;
+        use std::path::Path;
+        use std::process::Command;
+
+        let drm_path = Path::new("/sys/class/drm");
+        if !drm_path.exists() {
+            return;
+        }
+
+        // Build a PCI slot → human-readable name map from lspci
+        let gpu_names = Command::new("lspci")
+            .output()
+            .ok()
+            .map(|out| {
+                let text = String::from_utf8_lossy(&out.stdout);
+                text.lines()
+                    .filter(|l| {
+                        l.contains("VGA") || l.contains("3D") || l.contains("Display")
+                    })
+                    .filter_map(|l| {
+                        let slot = l.split_whitespace().next()?;
+                        // Line format: "01:00.0 VGA compatible controller: AMD ... [Radeon ...]"
+                        let name = l.splitn(2, ": ").nth(1)?;
+                        // Take the part after the second ": " (vendor: product)
+                        let product = name.splitn(2, ": ").nth(1).unwrap_or(name);
+                        Some((slot.to_string(), product.to_string()))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let entries = match fs::read_dir(drm_path) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name_str = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            // Only look at card* directories (not renderD* or card0-HDMI-A-1 etc.)
+            if !name_str.starts_with("card") || name_str.contains('-') {
+                continue;
+            }
+
+            let device_path = path.join("device");
+            if !device_path.exists() {
+                continue;
+            }
+
+            // Get PCI slot from uevent, then match to lspci name
+            let pci_slot = fs::read_to_string(device_path.join("uevent"))
+                .ok()
+                .and_then(|content| {
+                    content
+                        .lines()
+                        .find(|l| l.starts_with("PCI_SLOT_NAME="))
+                        .map(|l| {
+                            l.trim_start_matches("PCI_SLOT_NAME=")
+                                .trim_start_matches("0000:")
+                                .to_string()
+                        })
+                });
+
+            let gpu_name = pci_slot
+                .as_ref()
+                .and_then(|slot| {
+                    gpu_names
+                        .iter()
+                        .find(|(s, _)| s == slot)
+                        .map(|(_, name)| name.clone())
+                })
+                .unwrap_or_else(|| format!("GPU ({name_str})"));
+
+            // Utilization (AMD: gpu_busy_percent, Intel i915: similar)
+            let utilization = fs::read_to_string(device_path.join("gpu_busy_percent"))
+                .ok()
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .unwrap_or(0);
+
+            // VRAM (AMD only)
+            let mem_used = fs::read_to_string(device_path.join("mem_info_vram_used"))
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            let mem_total = fs::read_to_string(device_path.join("mem_info_vram_total"))
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+
+            // Temperature: scan hwmon subdirectories for temp1_input
+            let hwmon_dir = device_path.join("hwmon");
+            let temperature = if hwmon_dir.is_dir() {
+                fs::read_dir(&hwmon_dir)
+                    .ok()
+                    .and_then(|entries| {
+                        for e in entries.flatten() {
+                            let temp_path = e.path().join("temp1_input");
+                            if let Ok(val) = fs::read_to_string(&temp_path) {
+                                if let Ok(t) = val.trim().parse::<u32>() {
+                                    return Some(t / 1000); // millidegrees → degrees
+                                }
+                            }
+                        }
+                        None
+                    })
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+
+            // Power usage (AMD: power1_average in hwmon, microwatts)
+            let power_usage = if hwmon_dir.is_dir() {
+                fs::read_dir(&hwmon_dir)
+                    .ok()
+                    .and_then(|entries| {
+                        for e in entries.flatten() {
+                            let power_path = e.path().join("power1_average");
+                            if let Ok(val) = fs::read_to_string(&power_path) {
+                                if let Ok(uw) = val.trim().parse::<u64>() {
+                                    return Some((uw / 1000) as u32); // microwatts → milliwatts
+                                }
+                            }
+                        }
+                        None
+                    })
+            } else {
+                None
+            };
+
+            if !self.gpus.iter().any(|g| g.name == gpu_name) {
+                self.gpus.push(GpuInfo {
+                    name: gpu_name,
+                    temperature,
+                    utilization,
+                    memory_used: mem_used,
+                    memory_total: mem_total,
+                    fan_speed: None,
+                    power_usage,
+                    power_limit: None,
+                });
+
+                let idx = self.gpus.len() - 1;
+                while self.gpu_util_history.len() <= idx {
+                    self.gpu_util_history
+                        .push(VecDeque::from(vec![0.0; HISTORY_LEN]));
+                }
+                self.gpu_util_history[idx].pop_front();
+                self.gpu_util_history[idx].push_back(utilization as f64);
+            }
+        }
     }
 
     fn sort_processes(&mut self) {
@@ -453,10 +769,10 @@ impl App {
         if self.active_tab != Tab::Processes {
             return;
         }
-        if let Some(&idx) = self.filtered_processes.get(self.process_scroll) {
-            if let Some(proc) = self.processes.get(idx) {
-                self.kill_confirm = Some(proc.pid);
-            }
+        if let Some(&idx) = self.filtered_processes.get(self.process_scroll)
+            && let Some(proc) = self.processes.get(idx)
+        {
+            self.kill_confirm = Some(proc.pid);
         }
     }
 
@@ -504,6 +820,61 @@ impl App {
         self.filtered_processes
             .get(self.process_scroll)
             .and_then(|&idx| self.processes.get(idx))
+    }
+
+    pub fn show_detail(&mut self) {
+        if self.active_tab != Tab::Processes {
+            return;
+        }
+        if let Some(&idx) = self.filtered_processes.get(self.process_scroll)
+            && let Some(p) = self.processes.get(idx)
+        {
+            let pid = Pid::from_u32(p.pid);
+            let base = ProcessInfo {
+                pid: p.pid,
+                name: p.name.clone(),
+                cpu: p.cpu,
+                memory: p.memory,
+                status: p.status.clone(),
+                run_time: p.run_time,
+                disk_read: p.disk_read,
+                disk_write: p.disk_write,
+            };
+            let detail = if let Some(proc_) = self.system.process(pid) {
+                ProcessDetail {
+                    base,
+                    parent_pid: proc_.parent().map(|pp| pp.as_u32()),
+                    cmd: proc_.cmd().iter().map(|s| s.to_string_lossy().to_string()).collect::<Vec<_>>().join(" "),
+                    exe: proc_.exe().map(|e| e.to_string_lossy().to_string()).unwrap_or_default(),
+                    root: proc_.root().map(|r| r.to_string_lossy().to_string()).unwrap_or_default(),
+                    environ_count: proc_.environ().len(),
+                    threads: proc_.tasks().map(|t| t.len() as u64),
+                    virtual_memory: proc_.virtual_memory(),
+                }
+            } else {
+                ProcessDetail {
+                    base,
+                    parent_pid: None,
+                    cmd: String::new(),
+                    exe: String::new(),
+                    root: String::new(),
+                    environ_count: 0,
+                    threads: None,
+                    virtual_memory: 0,
+                }
+            };
+            self.process_detail = Some(detail);
+            self.show_process_detail = true;
+        }
+    }
+
+    pub fn close_detail(&mut self) {
+        self.show_process_detail = false;
+        self.process_detail = None;
+    }
+
+    pub fn has_gpu(&self) -> bool {
+        !self.gpus.is_empty()
     }
 }
 
