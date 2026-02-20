@@ -1,0 +1,12 @@
+[package]
+name = "rust-monitor"
+version = "0.1.0"
+edition = "2024"
+description = "A terminal system monitor built with Rust and Ratatui"
+license = "MIT"
+repository = "https://github.com/KamilErdogmus/Rust-Monitor"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
+sysinfo = "0.38.2"
