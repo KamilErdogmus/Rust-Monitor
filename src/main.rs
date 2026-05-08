@@ -1,4 +1,4 @@
-mod app;
+﻿mod app;
 #[cfg(target_os = "macos")]
 mod macos_gpu;
 mod theme;
@@ -40,7 +40,6 @@ fn run(mut terminal: DefaultTerminal) -> io::Result<()> {
                     continue;
                 }
 
-                // Process detail popup
                 if app.show_process_detail {
                     app.close_detail();
                     continue;

@@ -1,11 +1,11 @@
-use ratatui::{
+﻿use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     widgets::{Block, Cell, Row, Sparkline, Table},
-    Frame,
 };
 
-use crate::app::{format_bytes, App};
+use crate::app::{App, format_bytes};
 use crate::theme::ThemeColors;
 
 pub fn draw_network_detail(frame: &mut Frame, app: &App, colors: &ThemeColors, area: Rect) {

@@ -1,16 +1,18 @@
+﻿
 use ratatui::{
+    Frame,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph, Wrap},
-    Frame,
 };
 
-use crate::app::{format_bytes, format_duration, App};
+use crate::app::{App, format_bytes, format_duration};
 use crate::theme::ThemeColors;
 use super::helpers::{centered_rect, detail_line};
 
 pub fn draw_help_popup(frame: &mut Frame, colors: &ThemeColors) {
     let area = centered_rect(50, 60, frame.area());
+
     frame.render_widget(Clear, area);
 
     let help_text = vec![
@@ -103,6 +105,7 @@ pub fn draw_kill_confirm(frame: &mut Frame, app: &App, colors: &ThemeColors) {
     frame.render_widget(Clear, area);
 
     let pid = app.kill_confirm.unwrap_or(0);
+
     let name = app
         .selected_process()
         .map(|p| p.name.clone())
@@ -118,10 +121,7 @@ pub fn draw_kill_confirm(frame: &mut Frame, app: &App, colors: &ThemeColors) {
                     .fg(colors.text)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                format!(" (PID {pid})?"),
-                Style::default().fg(colors.danger),
-            ),
+            Span::styled(format!(" (PID {pid})?"), Style::default().fg(colors.danger)),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -167,7 +167,11 @@ pub fn draw_process_detail(frame: &mut Frame, app: &App, colors: &ThemeColors) {
         Line::from(""),
         detail_line("CPU Usage", &format!("{:.1}%", detail.base.cpu), colors),
         detail_line("Memory", &format_bytes(detail.base.memory), colors),
-        detail_line("Virtual Memory", &format_bytes(detail.virtual_memory), colors),
+        detail_line(
+            "Virtual Memory",
+            &format_bytes(detail.virtual_memory),
+            colors,
+        ),
         detail_line(
             "Threads",
             &detail

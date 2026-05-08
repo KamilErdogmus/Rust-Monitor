@@ -1,12 +1,13 @@
+﻿
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
     text::Line,
     widgets::{Block, Gauge, Paragraph, Sparkline, Wrap},
-    Frame,
 };
 
-use crate::app::{format_bytes, App};
+use crate::app::{App, format_bytes};
 use crate::theme::ThemeColors;
 use super::helpers::{info_line, shrink_rect};
 
@@ -35,7 +36,11 @@ pub fn draw_system_info(frame: &mut Frame, app: &App, colors: &ThemeColors, area
         info_line("System Uptime", &app.uptime_str(), colors),
         info_line("Monitor Uptime", &app.monitor_uptime_str(), colors),
         info_line("Processes", &app.processes.len().to_string(), colors),
-        info_line("Network Interfaces", &app.network_interfaces.len().to_string(), colors),
+        info_line(
+            "Network Interfaces",
+            &app.network_interfaces.len().to_string(),
+            colors,
+        ),
         info_line("Disks", &app.disks.iter().count().to_string(), colors),
     ];
 
@@ -60,6 +65,7 @@ pub fn draw_system_info(frame: &mut Frame, app: &App, colors: &ThemeColors, area
                 colors,
             ));
             gpu_lines.push(info_line("  VRAM", &mem_str, colors));
+
             if let Some(fan) = gpu.fan_speed {
                 gpu_lines.push(info_line("  Fan Speed", &format!("{fan}%"), colors));
             }
@@ -92,16 +98,15 @@ pub fn draw_system_info(frame: &mut Frame, app: &App, colors: &ThemeColors, area
         .wrap(Wrap { trim: false });
     frame.render_widget(info, cols[0]);
 
-    // Right: Resource summary with big gauges
     let mut right_constraints = vec![
-        Constraint::Length(5), // CPU
-        Constraint::Length(5), // RAM
-        Constraint::Length(5), // Swap
+        Constraint::Length(5),
+        Constraint::Length(5),
+        Constraint::Length(5),
     ];
     for _ in &app.gpus {
         right_constraints.push(Constraint::Length(5));
     }
-    right_constraints.push(Constraint::Min(0)); // CPU History
+    right_constraints.push(Constraint::Min(0));
 
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -110,7 +115,6 @@ pub fn draw_system_info(frame: &mut Frame, app: &App, colors: &ThemeColors, area
 
     let mut chunk_idx = 0;
 
-    // CPU
     let cpu_block = Block::bordered()
         .title(" CPU ")
         .border_style(Style::default().fg(colors.cpu));
@@ -123,7 +127,6 @@ pub fn draw_system_info(frame: &mut Frame, app: &App, colors: &ThemeColors, area
     frame.render_widget(cpu_gauge, shrink_rect(cpu_inner, 1, 0));
     chunk_idx += 1;
 
-    // RAM
     let ram_pct = if app.total_memory > 0 {
         ((app.used_memory as f64 / app.total_memory as f64) * 100.0) as u16
     } else {
@@ -145,7 +148,6 @@ pub fn draw_system_info(frame: &mut Frame, app: &App, colors: &ThemeColors, area
     frame.render_widget(ram_gauge, shrink_rect(ram_inner, 1, 0));
     chunk_idx += 1;
 
-    // Swap
     let swap_pct = if app.total_swap > 0 {
         ((app.used_swap as f64 / app.total_swap as f64) * 100.0) as u16
     } else {
@@ -167,7 +169,6 @@ pub fn draw_system_info(frame: &mut Frame, app: &App, colors: &ThemeColors, area
     frame.render_widget(swap_gauge, shrink_rect(swap_inner, 1, 0));
     chunk_idx += 1;
 
-    // GPU gauges
     for gpu in &app.gpus {
         let gpu_mem_pct = if gpu.memory_total > 0 {
             ((gpu.memory_used as f64 / gpu.memory_total as f64) * 100.0) as u16
@@ -205,7 +206,6 @@ pub fn draw_system_info(frame: &mut Frame, app: &App, colors: &ThemeColors, area
         chunk_idx += 1;
     }
 
-    // CPU History
     let history_block = Block::bordered()
         .title(" CPU History (60s) ")
         .border_style(Style::default().fg(colors.cpu));

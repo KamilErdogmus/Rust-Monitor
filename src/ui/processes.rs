@@ -1,11 +1,12 @@
+﻿
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     widgets::{Block, Cell, Paragraph, Row, Table},
-    Frame,
 };
 
-use crate::app::{format_bytes, format_duration, App, InputMode};
+use crate::app::{App, InputMode, format_bytes, format_duration};
 use crate::theme::ThemeColors;
 
 pub fn draw_processes(frame: &mut Frame, app: &App, colors: &ThemeColors, area: Rect) {
@@ -35,6 +36,7 @@ pub fn draw_processes(frame: &mut Frame, app: &App, colors: &ThemeColors, area: 
     );
 
     let visible_rows = chunks[1].height.saturating_sub(4) as usize;
+
     let rows: Vec<Row> = app
         .filtered_processes
         .iter()
@@ -43,12 +45,14 @@ pub fn draw_processes(frame: &mut Frame, app: &App, colors: &ThemeColors, area: 
         .enumerate()
         .filter_map(|(i, &idx)| {
             let p = app.processes.get(idx)?;
+
             let is_selected = i == 0;
             let style = if is_selected {
                 Style::default().bg(colors.highlight_bg)
             } else {
                 Style::default()
             };
+
             Some(
                 Row::new(vec![
                     Cell::from(p.pid.to_string()),
@@ -116,12 +120,10 @@ fn draw_search_bar(frame: &mut Frame, app: &App, colors: &ThemeColors, area: Rec
         }
     };
 
-    let search = Paragraph::new(label)
-        .style(style)
-        .block(
-            Block::bordered()
-                .title(" Search ")
-                .border_style(Style::default().fg(colors.border)),
-        );
+    let search = Paragraph::new(label).style(style).block(
+        Block::bordered()
+            .title(" Search ")
+            .border_style(Style::default().fg(colors.border)),
+    );
     frame.render_widget(search, area);
 }

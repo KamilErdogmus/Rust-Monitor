@@ -1,8 +1,7 @@
+﻿use std::collections::VecDeque;
 use sysinfo::{Disks, Networks, Pid, Signal, System};
-use std::collections::VecDeque;
-use std::time::Instant;
 use nvml_wrapper::Nvml;
-
+use std::time::Instant;
 const HISTORY_LEN: usize = 60;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -15,7 +14,12 @@ pub enum Tab {
 
 impl Tab {
     pub fn all() -> &'static [Tab] {
-        &[Tab::Overview, Tab::Processes, Tab::SystemInfo, Tab::NetworkDetail]
+        &[
+            Tab::Overview,
+            Tab::Processes,
+            Tab::SystemInfo,
+            Tab::NetworkDetail,
+        ]
     }
 
     pub fn index(self) -> usize {
@@ -147,15 +151,12 @@ pub struct App {
     pub system: System,
     pub disks: Disks,
     pub networks: Networks,
-
-    // History data
     pub cpu_history: Vec<VecDeque<f64>>,
     pub global_cpu_history: VecDeque<f64>,
     pub mem_history: VecDeque<f64>,
     pub net_rx_history: VecDeque<f64>,
     pub net_tx_history: VecDeque<f64>,
 
-    // Current stat
     pub processes: Vec<ProcessInfo>,
     pub network_interfaces: Vec<NetworkInterface>,
     pub total_memory: u64,
@@ -167,7 +168,6 @@ pub struct App {
     pub net_rx: u64,
     pub net_tx: u64,
 
-    // System info
     pub hostname: String,
     pub os_name: String,
     pub os_version: String,
@@ -177,7 +177,6 @@ pub struct App {
     pub boot_time: u64,
     pub start_time: Instant,
 
-    // UI state
     pub active_tab: Tab,
     pub sort_by: SortBy,
     pub process_scroll: usize,
@@ -206,7 +205,6 @@ impl App {
         let disks = Disks::new_with_refreshed_list();
         let networks = Networks::new_with_refreshed_list();
         let cpu_count = system.cpus().len();
-
         let cpu_brand = system
             .cpus()
             .first()
@@ -226,11 +224,13 @@ impl App {
             system,
             disks,
             networks,
+
             cpu_history: vec![VecDeque::from(vec![0.0; HISTORY_LEN]); cpu_count],
             global_cpu_history: VecDeque::from(vec![0.0; HISTORY_LEN]),
             mem_history: VecDeque::from(vec![0.0; HISTORY_LEN]),
             net_rx_history: VecDeque::from(vec![0.0; HISTORY_LEN]),
             net_tx_history: VecDeque::from(vec![0.0; HISTORY_LEN]),
+
             processes: Vec::new(),
             network_interfaces: Vec::new(),
             total_memory: 0,
@@ -327,6 +327,7 @@ impl App {
         self.net_tx_history.pop_front();
         self.net_tx_history.push_back(tx as f64 / 1024.0);
 
+        let sys_uptime = System::uptime();
         self.processes = self
             .system
             .processes()
@@ -337,7 +338,7 @@ impl App {
                 cpu: proc_.cpu_usage(),
                 memory: proc_.memory(),
                 status: format!("{:?}", proc_.status()),
-                run_time: proc_.run_time(),
+                run_time: proc_.run_time().min(sys_uptime),
                 disk_read: proc_.disk_usage().read_bytes,
                 disk_write: proc_.disk_usage().written_bytes,
             })
@@ -349,56 +350,51 @@ impl App {
     }
 
     fn update_gpu(&mut self) {
-        // Try NVML first (NVIDIA GPUs on all platforms)
         if let Some(nvml) = &self.nvml
             && let Ok(count) = nvml.device_count()
         {
-                self.gpus.clear();
-                for i in 0..count {
-                    let device = match nvml.device_by_index(i) {
-                        Ok(d) => d,
-                        Err(_) => continue,
-                    };
+            self.gpus.clear();
+            for i in 0..count {
+                let device = match nvml.device_by_index(i) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
 
-                    let name = device.name().unwrap_or_else(|_| "Unknown GPU".into());
-                    let temperature = device
-                        .temperature(
-                            nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu,
-                        )
-                        .unwrap_or(0);
-                    let utilization =
-                        device.utilization_rates().map(|u| u.gpu).unwrap_or(0);
-                    let memory = device.memory_info().ok();
-                    let memory_used = memory.as_ref().map(|m| m.used).unwrap_or(0);
-                    let memory_total = memory.as_ref().map(|m| m.total).unwrap_or(0);
-                    let fan_speed = device.fan_speed(0).ok();
-                    let power_usage = device.power_usage().ok();
-                    let power_limit = device.enforced_power_limit().ok();
+                let name = device.name().unwrap_or_else(|_| "Unknown GPU".into());
+                let temperature = device
+                    .temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu)
+                    .unwrap_or(0);
+                let utilization = device.utilization_rates().map(|u| u.gpu).unwrap_or(0);
+                let memory = device.memory_info().ok();
+                let memory_used = memory.as_ref().map(|m| m.used).unwrap_or(0);
+                let memory_total = memory.as_ref().map(|m| m.total).unwrap_or(0);
+                let fan_speed = device.fan_speed(0).ok();
+                let power_usage = device.power_usage().ok();
+                let power_limit = device.enforced_power_limit().ok();
 
-                    self.gpus.push(GpuInfo {
-                        name,
-                        temperature,
-                        utilization,
-                        memory_used,
-                        memory_total,
-                        fan_speed,
-                        power_usage,
-                        power_limit,
-                    });
+                self.gpus.push(GpuInfo {
+                    name,
+                    temperature,
+                    utilization,
+                    memory_used,
+                    memory_total,
+                    fan_speed,
+                    power_usage,
+                    power_limit,
+                });
 
-                    while self.gpu_util_history.len() <= i as usize {
-                        self.gpu_util_history
-                            .push(VecDeque::from(vec![0.0; HISTORY_LEN]));
-                    }
-                    self.gpu_util_history[i as usize].pop_front();
-                    self.gpu_util_history[i as usize].push_back(utilization as f64);
+                while self.gpu_util_history.len() <= i as usize {
+                    self.gpu_util_history
+                        .push(VecDeque::from(vec![0.0; HISTORY_LEN]));
                 }
-                if !self.gpus.is_empty() {
-                    return;
-                }
+                self.gpu_util_history[i as usize].pop_front();
+                self.gpu_util_history[i as usize].push_back(utilization as f64);
+            }
+            if !self.gpus.is_empty() {
+                return;
+            }
         }
 
-        // Fallback: platform-specific GPU detection
         self.detect_platform_gpu();
     }
 
@@ -411,22 +407,18 @@ impl App {
         {
             self.detect_linux_gpu();
         }
-        // Windows without NVML: no fallback (AMD/Intel don't expose easy APIs)
     }
 
     #[cfg(target_os = "macos")]
     fn detect_macos_gpu(&mut self) {
-        // Use IOReport sampler for real-time metrics
         if let Some(sampler) = &mut self.apple_gpu_sampler {
             if let Some(metrics) = sampler.sample() {
-                // Get a nice GPU name from system_profiler
                 let gpu_name = if metrics.gpu_name == "Apple GPU" {
                     crate::macos_gpu::get_apple_gpu_name()
                 } else {
                     metrics.gpu_name
                 };
 
-                // Convert power from milliwatts to the same unit as NVML (milliwatts)
                 let power_usage = metrics.power_mw;
 
                 self.gpus.clear();
@@ -434,8 +426,8 @@ impl App {
                     name: gpu_name,
                     temperature: metrics.temperature,
                     utilization: metrics.utilization,
-                    memory_used: 0,  // Apple Silicon uses unified memory
-                    memory_total: 0, // No separate VRAM
+                    memory_used: 0,
+                    memory_total: 0,
                     fan_speed: None,
                     power_usage,
                     power_limit: None,
@@ -451,7 +443,6 @@ impl App {
             }
         }
 
-        // Fallback: just get GPU name from system_profiler
         let name = crate::macos_gpu::get_apple_gpu_name();
         if !self.gpus.iter().any(|g| g.name == name) {
             self.gpus.push(GpuInfo {
@@ -478,21 +469,16 @@ impl App {
             return;
         }
 
-        // Build a PCI slot → human-readable name map from lspci
         let gpu_names = Command::new("lspci")
             .output()
             .ok()
             .map(|out| {
                 let text = String::from_utf8_lossy(&out.stdout);
                 text.lines()
-                    .filter(|l| {
-                        l.contains("VGA") || l.contains("3D") || l.contains("Display")
-                    })
+                    .filter(|l| l.contains("VGA") || l.contains("3D") || l.contains("Display"))
                     .filter_map(|l| {
                         let slot = l.split_whitespace().next()?;
-                        // Line format: "01:00.0 VGA compatible controller: AMD ... [Radeon ...]"
                         let name = l.splitn(2, ": ").nth(1)?;
-                        // Take the part after the second ": " (vendor: product)
                         let product = name.splitn(2, ": ").nth(1).unwrap_or(name);
                         Some((slot.to_string(), product.to_string()))
                     })
@@ -513,7 +499,6 @@ impl App {
                 .to_string_lossy()
                 .to_string();
 
-            // Only look at card* directories (not renderD* or card0-HDMI-A-1 etc.)
             if !name_str.starts_with("card") || name_str.contains('-') {
                 continue;
             }
@@ -523,7 +508,6 @@ impl App {
                 continue;
             }
 
-            // Get PCI slot from uevent, then match to lspci name
             let pci_slot = fs::read_to_string(device_path.join("uevent"))
                 .ok()
                 .and_then(|content| {
@@ -547,13 +531,11 @@ impl App {
                 })
                 .unwrap_or_else(|| format!("GPU ({name_str})"));
 
-            // Utilization (AMD: gpu_busy_percent, Intel i915: similar)
             let utilization = fs::read_to_string(device_path.join("gpu_busy_percent"))
                 .ok()
                 .and_then(|s| s.trim().parse::<u32>().ok())
                 .unwrap_or(0);
 
-            // VRAM (AMD only)
             let mem_used = fs::read_to_string(device_path.join("mem_info_vram_used"))
                 .ok()
                 .and_then(|s| s.trim().parse::<u64>().ok())
@@ -563,7 +545,6 @@ impl App {
                 .and_then(|s| s.trim().parse::<u64>().ok())
                 .unwrap_or(0);
 
-            // Temperature: scan hwmon subdirectories for temp1_input
             let hwmon_dir = device_path.join("hwmon");
             let temperature = if hwmon_dir.is_dir() {
                 fs::read_dir(&hwmon_dir)
@@ -573,7 +554,7 @@ impl App {
                             let temp_path = e.path().join("temp1_input");
                             if let Ok(val) = fs::read_to_string(&temp_path) {
                                 if let Ok(t) = val.trim().parse::<u32>() {
-                                    return Some(t / 1000); // millidegrees → degrees
+                                    return Some(t / 1000);
                                 }
                             }
                         }
@@ -584,21 +565,18 @@ impl App {
                 0
             };
 
-            // Power usage (AMD: power1_average in hwmon, microwatts)
             let power_usage = if hwmon_dir.is_dir() {
-                fs::read_dir(&hwmon_dir)
-                    .ok()
-                    .and_then(|entries| {
-                        for e in entries.flatten() {
-                            let power_path = e.path().join("power1_average");
-                            if let Ok(val) = fs::read_to_string(&power_path) {
-                                if let Ok(uw) = val.trim().parse::<u64>() {
-                                    return Some((uw / 1000) as u32); // microwatts → milliwatts
-                                }
+                fs::read_dir(&hwmon_dir).ok().and_then(|entries| {
+                    for e in entries.flatten() {
+                        let power_path = e.path().join("power1_average");
+                        if let Ok(val) = fs::read_to_string(&power_path) {
+                            if let Ok(uw) = val.trim().parse::<u64>() {
+                                return Some((uw / 1000) as u32);
                             }
                         }
-                        None
-                    })
+                    }
+                    None
+                })
             } else {
                 None
             };
@@ -629,12 +607,14 @@ impl App {
     fn sort_processes(&mut self) {
         match self.sort_by {
             SortBy::Cpu => self.processes.sort_by(|a, b| {
-                b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal)
+                b.cpu
+                    .partial_cmp(&a.cpu)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             }),
             SortBy::Memory => self.processes.sort_by(|a, b| b.memory.cmp(&a.memory)),
-            SortBy::Name => self.processes.sort_by(|a, b| {
-                a.name.to_lowercase().cmp(&b.name.to_lowercase())
-            }),
+            SortBy::Name => self
+                .processes
+                .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
             SortBy::Pid => self.processes.sort_by(|a, b| a.pid.cmp(&b.pid)),
         }
     }
@@ -649,8 +629,7 @@ impl App {
                 .iter()
                 .enumerate()
                 .filter(|(_, p)| {
-                    p.name.to_lowercase().contains(&query)
-                        || p.pid.to_string().contains(&query)
+                    p.name.to_lowercase().contains(&query) || p.pid.to_string().contains(&query)
                 })
                 .map(|(i, _)| i)
                 .collect();
@@ -813,7 +792,11 @@ impl App {
     pub fn boot_time_str(&self) -> String {
         let secs_since_epoch = self.boot_time;
         let uptime = System::uptime();
-        format!("{}s ago (uptime: {})", secs_since_epoch, format_duration(uptime))
+        format!(
+            "{}s ago (uptime: {})",
+            secs_since_epoch,
+            format_duration(uptime)
+        )
     }
 
     pub fn selected_process(&self) -> Option<&ProcessInfo> {
@@ -844,9 +827,20 @@ impl App {
                 ProcessDetail {
                     base,
                     parent_pid: proc_.parent().map(|pp| pp.as_u32()),
-                    cmd: proc_.cmd().iter().map(|s| s.to_string_lossy().to_string()).collect::<Vec<_>>().join(" "),
-                    exe: proc_.exe().map(|e| e.to_string_lossy().to_string()).unwrap_or_default(),
-                    root: proc_.root().map(|r| r.to_string_lossy().to_string()).unwrap_or_default(),
+                    cmd: proc_
+                        .cmd()
+                        .iter()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    exe: proc_
+                        .exe()
+                        .map(|e| e.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                    root: proc_
+                        .root()
+                        .map(|r| r.to_string_lossy().to_string())
+                        .unwrap_or_default(),
                     environ_count: proc_.environ().len(),
                     threads: proc_.tasks().map(|t| t.len() as u64),
                     virtual_memory: proc_.virtual_memory(),

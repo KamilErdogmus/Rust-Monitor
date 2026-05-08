@@ -9,5 +9,5 @@ repository = "https://github.com/KamilErdogmus/Rust-Monitor"
 [dependencies]
 ratatui = "0.30"
 crossterm = "0.29"
-sysinfo = "0.38.2"
-nvml-wrapper = "0.12.0"
+sysinfo = "0.39"
+nvml-wrapper = "0.12"

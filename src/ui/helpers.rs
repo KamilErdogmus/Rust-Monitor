@@ -1,11 +1,10 @@
-use ratatui::{
+﻿use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
 };
 
 use crate::theme::ThemeColors;
-
 pub fn info_line(label: &str, value: &str, colors: &ThemeColors) -> Line<'static> {
     Line::from(vec![
         Span::styled(
@@ -14,7 +13,10 @@ pub fn info_line(label: &str, value: &str, colors: &ThemeColors) -> Line<'static
                 .fg(colors.text_dim)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(value.to_string(), Style::default().fg(colors.text)),
+        Span::styled(
+            value.to_string(),
+            Style::default().fg(colors.text),
+        ),
     ])
 }
 

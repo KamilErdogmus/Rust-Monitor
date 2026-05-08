@@ -1,12 +1,13 @@
+﻿
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
     text::{Line, Span},
     widgets::{Block, Gauge, Paragraph, Sparkline},
-    Frame,
 };
 
-use crate::app::{format_bytes, App};
+use crate::app::{App, format_bytes};
 use crate::theme::ThemeColors;
 
 pub fn draw_overview(frame: &mut Frame, app: &App, colors: &ThemeColors, area: Rect) {
@@ -69,6 +70,7 @@ fn draw_cpu(frame: &mut Frame, app: &App, colors: &ThemeColors, area: Rect) {
         .split(inner);
 
     let global_data: Vec<u64> = app.global_cpu_history.iter().map(|v| *v as u64).collect();
+
     let sparkline = Sparkline::default()
         .data(&global_data)
         .max(100)
@@ -92,6 +94,7 @@ fn draw_cpu(frame: &mut Frame, app: &App, colors: &ThemeColors, area: Rect) {
 
     for i in 0..cores_to_show {
         let usage = app.cpu_history[i].back().copied().unwrap_or(0.0);
+
         let label = format!("Core {:>2}: {:>5.1}%", i, usage);
         let gauge = Gauge::default()
             .gauge_style(Style::default().fg(colors.cpu_usage_color(usage)))
@@ -180,9 +183,10 @@ fn draw_network_overview(frame: &mut Frame, app: &App, colors: &ThemeColors, are
         ])
         .split(inner);
 
-    let rx_label = Paragraph::new(Line::from(vec![
-        Span::styled("↓ RX ", Style::default().fg(colors.success)),
-    ]));
+    let rx_label = Paragraph::new(Line::from(vec![Span::styled(
+        "↓ RX ",
+        Style::default().fg(colors.success),
+    )]));
     frame.render_widget(rx_label, chunks[0]);
 
     let rx_data: Vec<u64> = app.net_rx_history.iter().map(|v| *v as u64).collect();
@@ -191,9 +195,10 @@ fn draw_network_overview(frame: &mut Frame, app: &App, colors: &ThemeColors, are
         .style(Style::default().fg(colors.success));
     frame.render_widget(rx_spark, chunks[1]);
 
-    let tx_label = Paragraph::new(Line::from(vec![
-        Span::styled("↑ TX ", Style::default().fg(colors.warning)),
-    ]));
+    let tx_label = Paragraph::new(Line::from(vec![Span::styled(
+        "↑ TX ",
+        Style::default().fg(colors.warning),
+    )]));
     frame.render_widget(tx_label, chunks[2]);
 
     let tx_data: Vec<u64> = app.net_tx_history.iter().map(|v| *v as u64).collect();
@@ -212,6 +217,7 @@ fn draw_disks(frame: &mut Frame, app: &App, colors: &ThemeColors, area: Rect) {
     frame.render_widget(block, area);
 
     let mut lines: Vec<Line> = Vec::new();
+
     for disk in app.disks.iter() {
         let total = disk.total_space();
         let available = disk.available_space();
@@ -221,8 +227,10 @@ fn draw_disks(frame: &mut Frame, app: &App, colors: &ThemeColors, area: Rect) {
         } else {
             0.0
         };
+
         let mount = disk.mount_point().to_string_lossy();
         let fs = disk.file_system().to_string_lossy();
+
         let bar_width = 16;
         let filled = ((pct / 100.0) * bar_width as f64) as usize;
         let bar: String = "█".repeat(filled) + &"░".repeat(bar_width - filled);
